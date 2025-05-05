@@ -1,8 +1,8 @@
-# mscache
+# mscache3
 a tool to manipulate dcc(domain cached credentials) in windows registry, based mainly on the work of mimikatz and impacket
 
 # requirements
-* python2
+* python3
 * pycrypto
 * passlib
 * impacket
@@ -55,6 +55,6 @@ user being patched:
 
 logon information:
     username: FAKE\fakeuser
-    password: n1nty@360 A-TEAM
+    password: S0n0_B3ll0
     * you can logon with credential above when there is !!!no contact with DC!!!. When there is, you can't do that
 ```
